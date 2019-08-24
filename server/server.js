@@ -40,7 +40,7 @@ MongoClient.connect(MONGODB_URI, (err, db) => {
     for (let i = 0; i < 8; i++) {
       for (let rank = 1; rank < 9; rank++) {
         let fileValue = (i + 10).toString(18).toLowerCase();
-        board[fileValue + rank] = { piece: null, type: ((fileValue === "c" || fileValue === "f") && (rank === 3 || rank === 6) && "trap" || (rank === 1 && "silverGoal") || (rank === 8) && "goldGoal") || null };
+        board[fileValue + rank] = {piece: null, type: ((fileValue === "c" || fileValue === "f") && (rank === 3 || rank === 6) && "trap" || (rank === 1 && "silverGoal") || (rank === 8) && "goldGoal") || null};
       }
     }
     return board;
@@ -59,8 +59,70 @@ MongoClient.connect(MONGODB_URI, (err, db) => {
     });
   }
 
-  const makeAMove = (game, move) => {
+  const makeAMove = (game, moves) => {
+    let valid = true;
+    (move.rank >= 1 && move.rank <= 8 && move.file >= "a" && move.file <= "h" && !game.board[move.rank + move.file].piece && pieces[move.piece]) || (valid = false);
+    
+    switch (game.status) {
+      case "setup":
+        let pieces = {};
+        pieces[game.turnPlayer] = {};
 
+
+        moves.forEach(move => {
+            if ((game.turnPlayer === "gold" && move.rank < 3) || (game.turnPlayer === "silver" && move.rank > 6)) {
+              game.pieces[game.turnPlayer][move.piece] -= 1;
+              game.board[move.file + move.rank].piece = move.piece;
+
+              let strength = 0;
+
+              switch (move.piece.toLowerCase()) {
+                case "e":
+                  strength += 1;
+                case "m":
+                  strength += 1;
+                case "h":
+                  strength += 1;
+                case "d":
+                  strength += 1;
+                case "c":
+                  strength += 1;
+                case "r":
+                  strength = 0;
+                  break;
+              }
+
+              pieces[game.turnPlayer][move.piece] ? (pieces[game.turnPlayer][move.piece].at[move.file + move.rank] = {canMoveTo: [], canBeMovedTo: []}) : (pieces[game.turnPlayer][move.piece] = {colour: game.turnPlayer, strength: strength, at: {}});
+              
+            } else {
+              valid = false;
+            }
+        });
+        Object.values(game.pieces[game.turnPlayer]).forEach(remaining => {
+          remaining === 0 || (valid = false);
+        });
+
+        if (valid) {
+          
+        }
+        break;
+      case "playing":
+        break;
+    }
+
+    if (valid) {
+      if (game.turnPlayer = "silver") {
+        game.turnPlayer = "gold";
+        game.turnCount += 1;
+      } else {
+        game.turnPlayer = "silver";
+      }
+      viewedGames[game.id].forEach(id => {
+        updateGame(game, usersOnline[id]);
+      });
+    }
+
+    
   }
 
   const addToGame = (game, user) => {
@@ -70,9 +132,10 @@ MongoClient.connect(MONGODB_URI, (err, db) => {
       viewedGames[game.id] = [user.id];
     }
 
-    if (game.status === "waitForPlayer2") {
-      game.players.list.push({ id: user.playerId, name: user.playerName });
-      setupGame(game);
+    if (game.status === "wait" && game.players.list.length < 2) {
+      game.players.list.push({id: user.playerId, name: user.playerName});
+      user.send(JSON.stringify({type: "addPlayer", gameId: game.id}));
+      game.players.list >= 2 && setupGame(game);
     }
   }
 
@@ -110,14 +173,13 @@ MongoClient.connect(MONGODB_URI, (err, db) => {
     console.log('Client connected');
     ws.id = uuid();
     usersOnline[ws.id] = ws;
-    ws.send(JSON.stringify({ type: "sessionId", value: ws.id }));
 
     // Update user count when a user connects
-    wss.clients.forEach(client => {
+    /* wss.clients.forEach(client => {
       if (client.readyState === WebSocket.OPEN) {
         client.send(JSON.stringify({ type: "clientCount", value: wss.clients.size }));
       }
-    });
+    }); */
 
     // Give each message a unique id and the associated user's colour
     ws.on('message', (message) => {
@@ -127,7 +189,7 @@ MongoClient.connect(MONGODB_URI, (err, db) => {
           if (!message.playerId) {
             ws.playerId = uuid();
             ws.playerName = message.playerName || "Anonymous";
-            ws.send(JSON.stringify({ type: "playerId", value: ws.playerId }));
+            ws.send(JSON.stringify({type: "assignPlayerId", playerId: ws.playerId}));
           } else {
             ws.playerId = message.playerId;
           }
@@ -136,14 +198,19 @@ MongoClient.connect(MONGODB_URI, (err, db) => {
         case "newGame":
           let game = {
             id: uuid(),
-            status: "waitForPlayer2",
+            status: "wait",
             players: {
-              list: [{id: ws.playerId, name: ws.playerName}],
+              list: [],
               gold: null,
               silver: null
             },
+            pieces: {
+              gold: {R: 8, C: 2, D: 2, H: 2, M: 1, E: 1},
+              silver: {r: 8, c: 2, d: 2, h: 2, m: 1, e: 1}
+            },
             board: initBoard(),
             moveList: [],
+            positionCount: {},
             turnCount: 0,
             turnPlayer: "gold",
             winner: null
@@ -163,7 +230,7 @@ MongoClient.connect(MONGODB_URI, (err, db) => {
         case "move":
           let game = DataHelpers.getGame(message.gameId);
           if (game.players[turnPlayer] === message.playerId) {
-            makeAMove(game, message.value)
+            makeAMove(game, message.move)
           }
           break;
       }
@@ -179,14 +246,14 @@ MongoClient.connect(MONGODB_URI, (err, db) => {
     // Set up a callback for when a client closes the socket. This usually means they closed their browser.
     ws.on('close', () => {
       console.log('Client disconnected')
-      usersOnline[ws.id] = null;
+      delete usersOnline[ws.id];
 
       // Update user count when user disconnects
-      wss.clients.forEach(client => {
+      /* wss.clients.forEach(client => {
         if (client.readyState === WebSocket.OPEN) {
           client.send(JSON.stringify({ type: "clientCount", value: wss.clients.size }));
         }
-      });
+      }); */
     });
   });
 });

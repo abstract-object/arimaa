@@ -35,8 +35,11 @@ class App extends Component {
       
       // Update user count or update message list, depending on received data's type
       switch (receivedData.type) {
+        case "assignPlayerId":
+          localStorage.setItem("playerId", receivedData.playerId);
+          break;
         case "updateName":
-          localStorage.setItem("playerName", receivedData.value);
+          localStorage.setItem("playerName", receivedData.playerName);
           break;
         case "updateGame": 
           this.setState({game: receivedData.game});
