@@ -4,9 +4,8 @@ class App extends Component {
   constructor(props) {
     super(props);
     this.state = {
-      status: "viewHome",
-      game: null,
-      player: {}
+      display: "home",
+      game: null
     }
   }
 
@@ -42,7 +41,7 @@ class App extends Component {
           localStorage.setItem("playerName", receivedData.playerName);
           break;
         case "updateGame": 
-          this.setState({game: receivedData.game});
+          this.setState({game: receivedData.game, display: "game"});
           break;
         case "addPlayer":
           let playingList = localStorage.getItem("playing");
@@ -56,7 +55,7 @@ class App extends Component {
   render() {
     return (
       <div>
-        <Board/>
+        {this.state.display === "game" && <Board board = {this.state.game.board} />}
         <MoveHistory/>
         
       </div>

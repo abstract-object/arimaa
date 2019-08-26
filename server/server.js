@@ -32,6 +32,7 @@ MongoClient.connect(MONGODB_URI, (err, db) => {
   // Create the WebSockets server
   const wss = new SocketServer({ server });
 
+  // Track users online by session id, and which games are seen by which users
   const usersOnline = {};
   const viewedGames = {};
 
@@ -59,70 +60,209 @@ MongoClient.connect(MONGODB_URI, (err, db) => {
     });
   }
 
-  const makeAMove = (game, moves) => {
+  const makeAMove = (game, player, moves) => {
+    let newBoard = Object.assign({}, game.board);
     let valid = true;
     (move.rank >= 1 && move.rank <= 8 && move.file >= "a" && move.file <= "h" && !game.board[move.rank + move.file].piece && pieces[move.piece]) || (valid = false);
     
-    switch (game.status) {
+    switch (moves.type) {
       case "setup":
-        let pieces = {};
-        pieces[game.turnPlayer] = {};
-
-
+        let pieces = {};  
         moves.forEach(move => {
-            if ((game.turnPlayer === "gold" && move.rank < 3) || (game.turnPlayer === "silver" && move.rank > 6)) {
-              game.pieces[game.turnPlayer][move.piece] -= 1;
-              game.board[move.file + move.rank].piece = move.piece;
+          if (game.status === "setup" && (game.turnPlayer === "gold" && move.rank < 3 && move.piece === move.piece.toUpperCase()) || (game.turnPlayer === "silver" && move.rank > 6 && move.piece === move.piece.toLowerCase())) {
+            game.pieces[game.turnPlayer][move.piece] -= 1;
+            newBoard[move.file + move.rank].piece = move.piece;
 
-              let strength = 0;
+            let strength = 0;
 
-              switch (move.piece.toLowerCase()) {
-                case "e":
-                  strength += 1;
-                case "m":
-                  strength += 1;
-                case "h":
-                  strength += 1;
-                case "d":
-                  strength += 1;
-                case "c":
-                  strength += 1;
-                case "r":
-                  strength = 0;
-                  break;
-              }
-
-              pieces[game.turnPlayer][move.piece] ? (pieces[game.turnPlayer][move.piece].at[move.file + move.rank] = {canMoveTo: [], canBeMovedTo: []}) : (pieces[game.turnPlayer][move.piece] = {colour: game.turnPlayer, strength: strength, at: {}});
-              
-            } else {
-              valid = false;
+            switch (move.piece.toLowerCase()) {
+              case "e":
+                strength += 1;
+              case "m":
+                strength += 1;
+              case "h":
+                strength += 1;
+              case "d":
+                strength += 1;
+              case "c":
+                strength += 1;
+              case "r":
+                strength = 0;
+                break;
             }
+
+            pieces[move.file + move.rank] = {colour: game.turnPlayer, type: move.piece, strength: strength, previousLocation: null, isFrozen: false, canMoveTo: [], canPush: [], canBePushedBy: [], canPull: [], canBePulledTo: null, hasPushed: false};
+
+          } else {
+            valid = false;
+          }
         });
+      
         Object.values(game.pieces[game.turnPlayer]).forEach(remaining => {
           remaining === 0 || (valid = false);
         });
 
-        if (valid) {
-          
-        }
+        valid && (game.pieces = pieces, game.board = newBoard);
         break;
       case "playing":
+        break;
+      case "resetTurn":
+        let savedGame = DataHelpers.getGame(game.id);
+        updateGame(savedGame, player);
         break;
     }
 
     if (valid) {
+      updateGameState(game, "end");
       if (game.turnPlayer = "silver") {
         game.turnPlayer = "gold";
         game.turnCount += 1;
+        (game.status === "setup" && turnCount > 0) && (game.status = "playing");
       } else {
         game.turnPlayer = "silver";
       }
+      game.board = newBoard;
+      saveBoardPosition(game);
       viewedGames[game.id].forEach(id => {
         updateGame(game, usersOnline[id]);
       });
+    } else {
+      return {error: "Invalid move."};
+    }
+  }
+
+  const findAdjacentSquares = location => {
+    let left = (String.fromCharCode(location[0]) > "a" ? (String.fromCharCode(location[0] - 1) + location[1]) : null);
+    let right = (String.fromCharCode(location[0]) < "h" ? (String.fromCharCode(location[0] + 1) + location[1]) : null);
+    let up = (location[1] < 8 ? (String.fromCharCode(location[0]) + (location[1] + 1)) : null);
+    let down = (location[1] > 1 ? (String.fromCharCode(location[0]) + (location[1] - 1)) : null);
+
+    return [left, right, up, down];
+  }
+
+  const adjacentToAlly = (piece, adjacentSquares) => {
+    for (let location of adjacentSquares) {
+      if (location && game.pieces[location].colour === piece.colour) return true;
+    }
+    return false;
+  }
+
+  const adjacentToStrongerEnemies = (piece, adjacentSquares) => {
+    let output = [];
+    for (let location of adjacentSquares) {
+      if (location && game.pieces[location].colour !== piece.colour && game.pieces[location].strength > piece.strength) output.push(location);
+    }
+    return output;
+  }
+
+  const updateMovedAndAdjacentPieces = (game, locations) => {
+    // Check for captures first
+    let traps = locations.filter(value => {
+      return value === ("c" || "f") + ("3" || "6");
+    })
+
+    for (let location of traps) {
+      let adjacentSquares = findAdjacentSquares(location);
+      let isAdjacentToAlly = adjacentToAlly(game.pieces[location], adjacentSquares);
+
+      if (!isAdjacentToAlly) {
+        delete game.pieces[location];
+        game.board[location].piece = null;
+      }
     }
 
-    
+    let allAffectedPieces = [...locations];
+
+    for (let location of locations) {
+      let piece = game.pieces[location];
+      // Make sure the adjacent squares checked are not out of bounds
+      let adjacentSquares = findAdjacentSquares(location);
+      allAffectedPieces = allAffectedPieces.concat(adjacentSquares.filter(value => {
+        return allAffectedPieces.indexOf(value) < 0;
+      }));
+      
+      // Check for adjacent allies and stronger enemies
+      let isAdjacentToAlly = adjacentToAlly(piece, adjacentSquares);
+      let adjacentStrongerEnemies = adjacentToStrongerEnemies(piece, adjacentSquares);
+
+      // Check if adjacent to stronger enemy piece and not adjacent to ally; if so, piece is frozen
+      if (adjacentStrongerEnemies.length > 0 && !isAdjacentToAlly) {
+        piece.isFrozen = true;
+      } else {
+        piece.isFrozen = false;
+      }
+
+      // Check possible destination squares
+      if (!piece.isFrozen) {
+        adjacentSquares.forEach(value => {
+          (!game.pieces[value]) && piece.canMoveTo.push(value);
+        })
+      }
+    }
+
+    for (let location of allAffectedPieces) {
+      let piece = game.pieces[location];
+      let adjacentSquares = findAdjacentSquares(location);
+      let adjacentStrongerEnemies = adjacentToStrongerEnemies(piece, adjacentSquares);
+
+      // Note if piece is pushable or pullable
+      adjacentStrongerEnemies.forEach(enemy => {
+        let enemyPiece = game.pieces[enemy];
+        if (!enemyPiece.isFrozen && piece.canMoveTo.length > 0) {
+          piece.canBePushedBy.push(enemy);
+          enemyPiece.canPush.push(location);
+        }
+        if (enemyPiece.canMoveTo.length > 0) {
+          enemyPiece.canPull.push(location);
+        }
+      })
+    }
+  }
+
+  const checkRabbitWin = (game, rabbits) => {
+    // Keep track if rabbits of either side exist; own rabbits are first, then enemy
+    let ownRabbitExists = (rabbits[0].length > 0 ? true : false);
+    let enemyRabbitExists = (rabbits[1].length > 0 ? true : false);
+
+    if (!enemyRabbitExists) return game.turnPlayer;
+    if (!ownRabbitExists) return game.pieces[rabbits[1][0]].colour;
+
+    for (let colour of rabbits) {
+      for (let location of colour) {
+        let piece = game.pieces[location];
+        // Check if rabbit on goal at end of move
+        if (game.board[location].type === piece.colour + "Goal") {
+          return piece.colour;
+        }
+      }
+    }
+
+    return null;
+  }
+
+  const checkImmobility = (game, ownPieces) => {
+    let immobilized = true;
+
+    for (let location of ownPieces) {
+      if (game.pieces[location].colour === game.turnPlayer && (!game.pieces[location].isFrozen && (game.pieces[location].canMoveTo.length > 0 || game.pieces[location].canPush.length > 0))) {
+        immobilized = false;
+        break;
+      }
+    }
+
+    if (immobilized) {
+      if (game.turnPlayer === "gold") {
+        return "silver";
+      } else {
+        return "gold";
+      }
+    } else {
+      return null;
+    }
+  }
+
+  const saveBoardPosition = game => {
+
   }
 
   const addToGame = (game, user) => {
@@ -131,17 +271,16 @@ MongoClient.connect(MONGODB_URI, (err, db) => {
     } else {
       viewedGames[game.id] = [user.id];
     }
-
+    
+    updateGame(game, user);
     if (game.status === "wait" && game.players.list.length < 2) {
       game.players.list.push({id: user.playerId, name: user.playerName});
       user.send(JSON.stringify({type: "addPlayer", gameId: game.id}));
-      game.players.list >= 2 && setupGame(game);
+      game.players.list === 2 && setupGame(game);
     }
   }
 
-  const updateGame = (game, user) => {
-    DataHelpers.saveGame(game);
-
+  const updateGame = (game, user, playback) => {
     let output = Object.assign({}, game);
     output.players = {
       list: [],
@@ -156,7 +295,7 @@ MongoClient.connect(MONGODB_URI, (err, db) => {
     });
 
     if (viewedGames[game.id].includes(user.id)) {
-      user.send(JSON.stringify({ type: "updateGame", game: output }));
+      user.send(JSON.stringify({type: "updateGame", game: output, playback: (playback || null)}));
     } else {
       if (viewedGames[game.id].length <= 1) {
         delete viewedGames[game.id];
@@ -213,6 +352,7 @@ MongoClient.connect(MONGODB_URI, (err, db) => {
             positionCount: {},
             turnCount: 0,
             turnPlayer: "gold",
+            movesRemaining: 4,
             winner: null
           };
           addToGame(game, ws);
@@ -230,7 +370,7 @@ MongoClient.connect(MONGODB_URI, (err, db) => {
         case "move":
           let game = DataHelpers.getGame(message.gameId);
           if (game.players[turnPlayer] === message.playerId) {
-            makeAMove(game, message.move)
+            makeAMove(game, ws, message.move)
           }
           break;
       }
