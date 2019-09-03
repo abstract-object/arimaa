@@ -34,8 +34,8 @@ MongoClient.connect(MONGODB_URI, (err, db) => {
   const wss = new SocketServer({ server });
 
   // Track users online by session id, and which games are seen by which users
-  const usersOnline = {};
-  const viewedGames = {};
+  const usersOnline = new Map();
+  const viewedGames = new Map();
 
   const initBoard = () => {
     const board = {};
@@ -56,8 +56,8 @@ MongoClient.connect(MONGODB_URI, (err, db) => {
 
     game.status = "setup";
 
-    viewedGames[game.id].forEach(id => {
-      updateGame(game, usersOnline[id]);
+    viewedGames.get(game.id).forEach(id => {
+      updateGame(game, usersOnline.get(id));
     });
   }
 
@@ -191,8 +191,8 @@ MongoClient.connect(MONGODB_URI, (err, db) => {
       game.movesRemaining = 4;
       game.board = newBoard;
       
-      viewedGames[game.id].forEach(id => {
-        updateGame(game, usersOnline[id], playback);
+      viewedGames.get(game.id).forEach(id => {
+        updateGame(game, usersOnline.get(id), playback);
       });
 
       DataHelpers.saveGame(game);
@@ -205,10 +205,10 @@ MongoClient.connect(MONGODB_URI, (err, db) => {
   }
 
   const addToGame = (game, user) => {
-    if (viewedGames[game.id]) {
-      viewedGames[game.id].includes(user.id) || viewedGames[game.id].push(user.id);
+    if (viewedGames.has(game.id)) {
+      viewedGames.get(game.id).includes(user.id) || viewedGames.get(game.id).push(user.id);
     } else {
-      viewedGames[game.id] = [user.id];
+      viewedGames.get(game.id) = [user.id];
     }
     
     updateGame(game, user);
@@ -233,13 +233,13 @@ MongoClient.connect(MONGODB_URI, (err, db) => {
       (game.players.silver === player.id) && (output.players.silver = player.name);
     });
 
-    if (viewedGames[game.id].includes(user.id)) {
+    if (viewedGames.get(game.id).includes(user.id)) {
       user.send(JSON.stringify({type: "updateGame", game: output, playback: (playback || null)}));
     } else {
-      if (viewedGames[game.id].length <= 1) {
-        delete viewedGames[game.id];
+      if (viewedGames.get(game.id).size <= 1) {
+        viewedGames.delete(game.id);
       } else {
-        viewedGames[game.id].splice(viewedGames[game.id].indexOf(user.id), 1);
+        viewedGames.get(game.id).splice(viewedGames.get(game.id).indexOf(user.id), 1);
       }
     }
   }
@@ -250,7 +250,7 @@ MongoClient.connect(MONGODB_URI, (err, db) => {
   wss.on('connection', (ws) => {
     console.log('Client connected');
     ws.id = uuid();
-    usersOnline[ws.id] = ws;
+    usersOnline.set(ws.id, ws);
 
     // Update user count when a user connects
     /* wss.clients.forEach(client => {
@@ -271,7 +271,7 @@ MongoClient.connect(MONGODB_URI, (err, db) => {
           } else {
             ws.playerId = message.playerId;
           }
-          usersOnline[ws.id].playing = message.playing;
+          usersOnline.get(ws.id).playing = message.playing;
           break;
         case "newGame":
           let game = {
@@ -327,8 +327,8 @@ MongoClient.connect(MONGODB_URI, (err, db) => {
             game.status = "won";
             DataHelpers.saveGame(game);
 
-            viewedGames[game.id].forEach(id => {
-              updateGame(game, usersOnline[id], playback);
+            viewedGames.get(game.id).forEach(id => {
+              updateGame(game, usersOnline.get(id), playback);
             });
           }
           break;
@@ -338,7 +338,7 @@ MongoClient.connect(MONGODB_URI, (err, db) => {
     // Set up a callback for when a client closes the socket. This usually means they closed their browser.
     ws.on('close', () => {
       console.log('Client disconnected')
-      delete usersOnline[ws.id];
+      usersOnline.delete(ws.id);
 
       // Update user count when user disconnects
       /* wss.clients.forEach(client => {
