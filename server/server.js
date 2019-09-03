@@ -61,15 +61,17 @@ MongoClient.connect(MONGODB_URI, (err, db) => {
     });
   }
 
-  const makeAMove = (game, player, moves) => {
+  const makeAMove = (game, player, action) => {
     let newBoard = Object.assign({}, game.board);
-    let valid = true;
+    let error = null;
+    let endMove = false;
     let locations = [];
+    let playback = null;
     
-    switch (moves.type) {
+    switch (action.type) {
       case "setup":
         let pieces = {};  
-        for (let move of moves) {
+        for (let move of action.moves) {
           if (game.status === "setup" 
           && 
           move.destination[0] >= "a" && move.destination[0] <= "h"
@@ -106,36 +108,79 @@ MongoClient.connect(MONGODB_URI, (err, db) => {
               canMoveTo: [], 
               canPush: [], 
               canBePushedTo: [],
-              canPull: []
+              canPull: [],
+              movesRemaining: 4
             };
-
+            
+            locations.push(move.destination);
           } else {
-            valid = false;
+            error = `You cannot place ${move.piece} at ${move.destination}.`;
             break;
           }
         };
       
         Object.values(game.pieces[game.turnPlayer]).forEach(remaining => {
-          remaining === 0 || (valid = false);
+          remaining === 0 || (error = "This is not a valid starting board.");
         });
 
-        if (valid) {
+        if (!error) {
           game.pieces = pieces, game.board = newBoard;
           GameLogic.updateMovedAndAdjacentPieces(game, locations);
+          endMove = true;
         }
         break;
       case "play":
+        let remaining = game.movesRemaining;
+        if (remaining === 4) {
+          game.turnStartPosition = Object.assign({}, game.board);
+        }
+
+        currentPlayback = GameLogic.verifyMove(game, action.move, remaining);
+
+        if (currentPlayback) {
+          if (action.move.type === ("push" || "pull")) {
+            remaining -= 2;
+          } else if (action.move.type === "move") {
+            remaining -= 1;
+          } else {
+            error = "Unrecognized input.";
+            break;
+          }
+
+          for (let piece of currentPlayback) {
+            for (let [start, end] of Object.entries(piece)) {
+              locations.includes(start) || locations.push(start);
+              locations.includes(end) || locations.push(end);
+            }
+          }
+
+          GameLogic.updateMovedAndAdjacentPieces(game, locations);
+
+          playback = playback.concat(currentPlayback);
+        } else {
+          error = "That is an invalid move.";
+        }
+        if (remaining < 1 || action.move.type === "finishMove") {
+          endMove = true;
+          if (game.board === game.turnStartPosition) {
+            error = "You have made no change to the state of the board after your turn.";
+          }
+        }
         break;
       case "resetTurn":
         let savedGame = DataHelpers.getGame(game.id);
         updateGame(savedGame, player);
         break;
       case "resign":
+        if (game.turnPlayer = "silver") {
+          game.winner = "gold";
+        } else {
+          game.winner = "silver";
+        }
         break;
     }
 
-    if (valid) {
-      updateGameState(game, "end");
+    if (!error && endMove) {
       if (game.turnPlayer = "silver") {
         game.turnPlayer = "gold";
         game.turnCount += 1;
@@ -143,18 +188,20 @@ MongoClient.connect(MONGODB_URI, (err, db) => {
       } else {
         game.turnPlayer = "silver";
       }
+      game.movesRemaining = 4;
       game.board = newBoard;
-      saveBoardPosition(game);
+      
       viewedGames[game.id].forEach(id => {
-        updateGame(game, usersOnline[id]);
+        updateGame(game, usersOnline[id], playback);
       });
+
+      DataHelpers.saveGame(game);
+    } else if (error) {
+      player.send(JSON.stringify({type: "error", error: error}));
     } else {
-      return {error: "Invalid move."};
+      updateGame(game, player);
     }
-  }
-
-  const saveBoardPosition = game => {
-
+    
   }
 
   const addToGame = (game, user) => {
@@ -261,8 +308,28 @@ MongoClient.connect(MONGODB_URI, (err, db) => {
           break;
         case "move":
           let game = DataHelpers.getGame(message.gameId);
-          if (game.players[turnPlayer] === message.playerId) {
-            makeAMove(game, ws, message.move);
+          game.winner = GameLogic.checkImmobility(game, game.pieces.filter(value => {
+            return value.colour === game.turnPlayer;
+          }));
+
+          if (!game.winner && game.players[turnPlayer] === message.playerId) {
+            makeAMove(game, ws, message.action);
+          }
+
+          game.winner = checkThreefoldRepetition(game);
+          if (!game.winner) {
+            game.winner = checkRabbitWin(game, game.pieces.filter(value => {
+              return value.type.toLowerCase() === "r";
+            }))
+          }
+
+          if (game.winner) {
+            game.status = "won";
+            DataHelpers.saveGame(game);
+
+            viewedGames[game.id].forEach(id => {
+              updateGame(game, usersOnline[id], playback);
+            });
           }
           break;
       }

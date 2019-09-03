@@ -107,17 +107,52 @@ module.exports = () => {
     verifyMove: (game, move, remaining) => {
       switch (move.type) {
         case move:
-          return game.pieces[move.piece].canMoveTo.includes(move.destination) && game.pieces[move.piece].colour === game.turnPlayer;
+          if (game.pieces[move.piece].canMoveTo.includes(move.destination) && game.pieces[move.piece].colour === game.turnPlayer) {
+            let playback = [{start: move.piece, end: move.destination}];
+
+            game.pieces[move.destination] = Object.assign({}, game.pieces[move.piece]);
+            delete game.pieces[move.piece];
+            game.board[move.destination].piece = game.pieces[move.destination].type;
+            game.board[move.piece].piece = null;
+            
+            return playback;
+          }
         case pull:
-          return remaining > 1 &&
+          if (remaining > 1 &&
           game.pieces[move.pullingPiece].canMoveTo.includes(move.pullingDestination) && 
           game.pieces[move.pullingPiece].canPull.includes(move.pulledPiece) &&
-          game.pieces[move.pullingPiece].colour === game.turnPlayer;
+          game.pieces[move.pullingPiece].colour === game.turnPlayer) {
+            let playback = [{start: move.pullingPiece, end: move.pullingDestination},
+            {start: move.pulledPiece, end: move.pullingPiece}];
+
+            game.pieces[move.pullingDestination] = Object.assign({}, game.pieces[move.pullingPiece]);
+            game.pieces[move.pullingPiece] = Object.assign({}, game.pieces[move.pulledPiece]);
+            delete game.pieces[move.pulledPiece];
+            game.board[move.pullingDestination] = game.pieces[move.pullingDestination].piece.type;
+            game.board[move.pullingPiece] = game.pieces[move.pullingPiece].piece.type;
+            game.board[move.pulledPiece].piece = null;
+            
+            return playback;
+          }
         case push:
-          return remaining > 1 &&
+          if (remaining > 1 &&
           game.pieces[move.pushedPiece].canBePushedTo.includes(move.pushedDestination) &&
           game.pieces[move.pushingPiece].canPush.includes(game.pieces[move.pushedPiece]) &&
-          game.pieces[move.pushingPiece].colour === game.turnPlayer;
+          game.pieces[move.pushingPiece].colour === game.turnPlayer) {
+            let playback = [{start: move.pushedPiece, end: move.pushedDestination},
+              {start: move.pushingPiece, end: move.pushedPiece}];
+
+            game.pieces[move.pushedDestination] = Object.assign({}, game.pieces[move.pushedPiece]);
+            game.pieces[move.pushedPiece] = Object.assign({}, game.pieces[move.pushingPiece]);
+            delete game.pieces[move.pushingPiece];
+            game.board[move.pushedDestination] = game.pieces[move.pushedDestination].piece.type;
+            game.board[move.pushedPiece] = game.pieces[move.pushedPiece].piece.type;
+            game.board[move.pushingPiece].piece = null;
+            
+            return playback;
+          }
+        default:
+          return null;
       }
     },
   

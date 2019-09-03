@@ -4,7 +4,7 @@
 module.exports = (db) => {
   return {
     saveGame: (gameInfo) => {
-      db.collection("arimaa").insertOne(gameInfo);
+      db.collection("arimaa").replaceOne({"id": gameInfo.id}, gameInfo, {upsert: true});
     },
 
     getGame: (gameId) => {
