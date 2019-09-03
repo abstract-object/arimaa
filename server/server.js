@@ -28,6 +28,7 @@ MongoClient.connect(MONGODB_URI, (err, db) => {
   console.log(`Connected to mongodb: ${MONGODB_URI}`);
 
   const DataHelpers = require("./data.js")(db);
+  const GameLogic = require("./game.js");
 
   // Create the WebSockets server
   const wss = new SocketServer({ server });
@@ -63,15 +64,21 @@ MongoClient.connect(MONGODB_URI, (err, db) => {
   const makeAMove = (game, player, moves) => {
     let newBoard = Object.assign({}, game.board);
     let valid = true;
-    (move.rank >= 1 && move.rank <= 8 && move.file >= "a" && move.file <= "h" && !game.board[move.rank + move.file].piece && pieces[move.piece]) || (valid = false);
+    let locations = [];
     
     switch (moves.type) {
       case "setup":
         let pieces = {};  
-        moves.forEach(move => {
-          if (game.status === "setup" && (game.turnPlayer === "gold" && move.rank < 3 && move.piece === move.piece.toUpperCase()) || (game.turnPlayer === "silver" && move.rank > 6 && move.piece === move.piece.toLowerCase())) {
+        for (let move of moves) {
+          if (game.status === "setup" 
+          && 
+          move.destination[0] >= "a" && move.destination[0] <= "h"
+          &&
+          ((game.turnPlayer === "gold" && Number(move.destination[1]) < 3 && move.piece === move.piece.toUpperCase()) 
+          || 
+          (game.turnPlayer === "silver" && Number(move.destination[1]) > 6 && move.piece === move.piece.toLowerCase()))) {
             game.pieces[game.turnPlayer][move.piece] -= 1;
-            newBoard[move.file + move.rank].piece = move.piece;
+            newBoard[move.destination].piece = move.piece;
 
             let strength = 0;
 
@@ -91,24 +98,39 @@ MongoClient.connect(MONGODB_URI, (err, db) => {
                 break;
             }
 
-            pieces[move.file + move.rank] = {colour: game.turnPlayer, type: move.piece, strength: strength, previousLocation: null, isFrozen: false, canMoveTo: [], canPush: [], canBePushedBy: [], canPull: [], canBePulledTo: null, hasPushed: false};
+            pieces[move.destination] = {
+              colour: game.turnPlayer, 
+              type: move.piece, 
+              strength: strength,
+              isFrozen: false, 
+              canMoveTo: [], 
+              canPush: [], 
+              canBePushedTo: [],
+              canPull: []
+            };
 
           } else {
             valid = false;
+            break;
           }
-        });
+        };
       
         Object.values(game.pieces[game.turnPlayer]).forEach(remaining => {
           remaining === 0 || (valid = false);
         });
 
-        valid && (game.pieces = pieces, game.board = newBoard);
+        if (valid) {
+          game.pieces = pieces, game.board = newBoard;
+          GameLogic.updateMovedAndAdjacentPieces(game, locations);
+        }
         break;
-      case "playing":
+      case "play":
         break;
       case "resetTurn":
         let savedGame = DataHelpers.getGame(game.id);
         updateGame(savedGame, player);
+        break;
+      case "resign":
         break;
     }
 
@@ -128,136 +150,6 @@ MongoClient.connect(MONGODB_URI, (err, db) => {
       });
     } else {
       return {error: "Invalid move."};
-    }
-  }
-
-  const findAdjacentSquares = location => {
-    let left = (String.fromCharCode(location[0]) > "a" ? (String.fromCharCode(location[0] - 1) + location[1]) : null);
-    let right = (String.fromCharCode(location[0]) < "h" ? (String.fromCharCode(location[0] + 1) + location[1]) : null);
-    let up = (location[1] < 8 ? (String.fromCharCode(location[0]) + (location[1] + 1)) : null);
-    let down = (location[1] > 1 ? (String.fromCharCode(location[0]) + (location[1] - 1)) : null);
-
-    return [left, right, up, down];
-  }
-
-  const adjacentToAlly = (piece, adjacentSquares) => {
-    for (let location of adjacentSquares) {
-      if (location && game.pieces[location].colour === piece.colour) return true;
-    }
-    return false;
-  }
-
-  const adjacentToStrongerEnemies = (piece, adjacentSquares) => {
-    let output = [];
-    for (let location of adjacentSquares) {
-      if (location && game.pieces[location].colour !== piece.colour && game.pieces[location].strength > piece.strength) output.push(location);
-    }
-    return output;
-  }
-
-  const updateMovedAndAdjacentPieces = (game, locations) => {
-    // Check for captures first
-    let traps = locations.filter(value => {
-      return value === ("c" || "f") + ("3" || "6");
-    })
-
-    for (let location of traps) {
-      let adjacentSquares = findAdjacentSquares(location);
-      let isAdjacentToAlly = adjacentToAlly(game.pieces[location], adjacentSquares);
-
-      if (!isAdjacentToAlly) {
-        delete game.pieces[location];
-        game.board[location].piece = null;
-      }
-    }
-
-    let allAffectedPieces = [...locations];
-
-    for (let location of locations) {
-      let piece = game.pieces[location];
-      // Make sure the adjacent squares checked are not out of bounds
-      let adjacentSquares = findAdjacentSquares(location);
-      allAffectedPieces = allAffectedPieces.concat(adjacentSquares.filter(value => {
-        return allAffectedPieces.indexOf(value) < 0;
-      }));
-      
-      // Check for adjacent allies and stronger enemies
-      let isAdjacentToAlly = adjacentToAlly(piece, adjacentSquares);
-      let adjacentStrongerEnemies = adjacentToStrongerEnemies(piece, adjacentSquares);
-
-      // Check if adjacent to stronger enemy piece and not adjacent to ally; if so, piece is frozen
-      if (adjacentStrongerEnemies.length > 0 && !isAdjacentToAlly) {
-        piece.isFrozen = true;
-      } else {
-        piece.isFrozen = false;
-      }
-
-      // Check possible destination squares
-      if (!piece.isFrozen) {
-        adjacentSquares.forEach(value => {
-          (!game.pieces[value]) && piece.canMoveTo.push(value);
-        })
-      }
-    }
-
-    for (let location of allAffectedPieces) {
-      let piece = game.pieces[location];
-      let adjacentSquares = findAdjacentSquares(location);
-      let adjacentStrongerEnemies = adjacentToStrongerEnemies(piece, adjacentSquares);
-
-      // Note if piece is pushable or pullable
-      adjacentStrongerEnemies.forEach(enemy => {
-        let enemyPiece = game.pieces[enemy];
-        if (!enemyPiece.isFrozen && piece.canMoveTo.length > 0) {
-          piece.canBePushedBy.push(enemy);
-          enemyPiece.canPush.push(location);
-        }
-        if (enemyPiece.canMoveTo.length > 0) {
-          enemyPiece.canPull.push(location);
-        }
-      })
-    }
-  }
-
-  const checkRabbitWin = (game, rabbits) => {
-    // Keep track if rabbits of either side exist; own rabbits are first, then enemy
-    let ownRabbitExists = (rabbits[0].length > 0 ? true : false);
-    let enemyRabbitExists = (rabbits[1].length > 0 ? true : false);
-
-    if (!enemyRabbitExists) return game.turnPlayer;
-    if (!ownRabbitExists) return game.pieces[rabbits[1][0]].colour;
-
-    for (let colour of rabbits) {
-      for (let location of colour) {
-        let piece = game.pieces[location];
-        // Check if rabbit on goal at end of move
-        if (game.board[location].type === piece.colour + "Goal") {
-          return piece.colour;
-        }
-      }
-    }
-
-    return null;
-  }
-
-  const checkImmobility = (game, ownPieces) => {
-    let immobilized = true;
-
-    for (let location of ownPieces) {
-      if (game.pieces[location].colour === game.turnPlayer && (!game.pieces[location].isFrozen && (game.pieces[location].canMoveTo.length > 0 || game.pieces[location].canPush.length > 0))) {
-        immobilized = false;
-        break;
-      }
-    }
-
-    if (immobilized) {
-      if (game.turnPlayer === "gold") {
-        return "silver";
-      } else {
-        return "gold";
-      }
-    } else {
-      return null;
     }
   }
 
@@ -349,10 +241,10 @@ MongoClient.connect(MONGODB_URI, (err, db) => {
             },
             board: initBoard(),
             moveList: [],
+            turnStartPosition: null,
             positionCount: {},
             turnCount: 0,
             turnPlayer: "gold",
-            movesRemaining: 4,
             winner: null
           };
           addToGame(game, ws);
@@ -370,17 +262,10 @@ MongoClient.connect(MONGODB_URI, (err, db) => {
         case "move":
           let game = DataHelpers.getGame(message.gameId);
           if (game.players[turnPlayer] === message.playerId) {
-            makeAMove(game, ws, message.move)
+            makeAMove(game, ws, message.move);
           }
           break;
       }
-
-      // Broadcast new message back to every connected user
-      wss.clients.forEach(client => {
-        if (client.readyState === WebSocket.OPEN) {
-          client.send(JSON.stringify(message));
-        }
-      });
     });
 
     // Set up a callback for when a client closes the socket. This usually means they closed their browser.
