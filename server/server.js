@@ -69,14 +69,19 @@ MongoClient.connect(MONGODB_URI, (err, db) => {
     let playback = null;
     let turnRecord = game.turnCount + game.turnPlayer[0] + " ";
     
+    if (
+      !(game.status === "setup" && action.type === "setup" ||
+        game.status === "playing" && action.type === ("play" || "resetTurn" || "resign") 
+      )
+    ) {
+      error = "Invalid request.";
+    }
+    
     switch (action.type) {
       case "setup":
         let pieces = {};  
         for (let move of action.moves) {
-          if (game.status === "setup" 
-          && 
-          move.destination[0] >= "a" && move.destination[0] <= "h"
-          &&
+          if (move.destination[0] >= "a" && move.destination[0] <= "h" &&
           ((game.turnPlayer === "gold" && Number(move.destination[1]) < 3 && move.piece === move.piece.toUpperCase()) 
           || 
           (game.turnPlayer === "silver" && Number(move.destination[1]) > 6 && move.piece === move.piece.toLowerCase()))) {

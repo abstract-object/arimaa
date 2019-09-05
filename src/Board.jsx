@@ -1,19 +1,28 @@
-import React, {Component} from 'react';
+import React from 'react';
 
-class Board extends Component {
-  constructor(props) {
-    super(props);
-    this.state = {
-      board: this.props.board
+Board = (props) => {
+  return (
+    <div id = "board">
+      {generateSquares(props.board, props.rotateBoard)}
+    </div>
+  );
+}
+
+generateSquares = (board, rotateBoard) => {
+  if (rotateBoard) {
+    for (let i = 7; i >= 0; i--) {
+      for (let rank = 8; rank > 0; rank--) {
+        let fileValue = (i + 10).toString(18).toLowerCase();
+        return <Square square = {props[fileValue + rank]}/>
+      }
     }
-  }
-  
-  render() {
-    return (
-      <div>
-        
-      </div>
-    );
+  } else {
+    for (let i = 0; i < 8; i++) {
+      for (let rank = 1; rank < 9; rank++) {
+        let fileValue = (i + 10).toString(18).toLowerCase();
+        return <Square square = {props[fileValue + rank]}/>
+      }
+    }
   }
 }
 export default Board;
