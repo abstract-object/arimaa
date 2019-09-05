@@ -67,6 +67,7 @@ MongoClient.connect(MONGODB_URI, (err, db) => {
     let endMove = false;
     let locations = [];
     let playback = null;
+    let turnRecord = game.turnCount + game.turnPlayer[0] + " ";
     
     switch (action.type) {
       case "setup":
@@ -113,6 +114,7 @@ MongoClient.connect(MONGODB_URI, (err, db) => {
             };
             
             locations.push(move.destination);
+            turnRecord += move.piece + move.destination;
           } else {
             error = `You cannot place ${move.piece} at ${move.destination}.`;
             break;
@@ -124,7 +126,9 @@ MongoClient.connect(MONGODB_URI, (err, db) => {
         });
 
         if (!error) {
-          game.pieces = pieces, game.board = newBoard;
+          game.pieces = pieces;
+          game.board = newBoard;
+          game.moveList.push(turnRecord);
           GameLogic.updateMovedAndAdjacentPieces(game, locations);
           endMove = true;
         }
@@ -190,6 +194,11 @@ MongoClient.connect(MONGODB_URI, (err, db) => {
       }
       game.movesRemaining = 4;
       game.board = newBoard;
+      if (game.positionCount[JSON.stringify({board: game.board, player: game.turnPlayer})]) {
+        game.positionCount[JSON.stringify({board: game.board, player: game.turnPlayer})] += 1;
+      } else {
+        game.positionCount[JSON.stringify({board: game.board, player: game.turnPlayer})] = 1;
+      }
       
       viewedGames.get(game.id).forEach(id => {
         updateGame(game, usersOnline.get(id), playback);
@@ -251,6 +260,9 @@ MongoClient.connect(MONGODB_URI, (err, db) => {
     console.log('Client connected');
     ws.id = uuid();
     usersOnline.set(ws.id, ws);
+
+    ws.isAlive = true;
+    ws.on('pong', () => {ws.isAlive = true;});
 
     // Update user count when a user connects
     /* wss.clients.forEach(client => {
@@ -339,13 +351,14 @@ MongoClient.connect(MONGODB_URI, (err, db) => {
     ws.on('close', () => {
       console.log('Client disconnected')
       usersOnline.delete(ws.id);
-
-      // Update user count when user disconnects
-      /* wss.clients.forEach(client => {
-        if (client.readyState === WebSocket.OPEN) {
-          client.send(JSON.stringify({ type: "clientCount", value: wss.clients.size }));
-        }
-      }); */
     });
   });
+  
+  setInterval(() => {
+    usersOnline.forEach(ws => {
+      if (!ws.isAlive) {ws.terminate(); return;}
+      ws.isAlive = false;
+      ws.ping();
+    });
+  }, 30000);
 });

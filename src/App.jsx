@@ -54,12 +54,21 @@ class App extends Component {
 
   render() {
     return (
-      <div>
-        {this.state.display === "game" && <Board board = {this.state.game.board} />}
-        <MoveHistory/>
-        
-      </div>
+      <main>
+        <ShowPage display = {this.state.display} game = {this.state.game}/>
+      </main>
     );
+  }
+
+  ShowPage = () => {
+    return ({display, ...props }) => {
+      switch (display) {
+        case "home":
+          return <Home {...props}/>;
+        case "game":
+          return <Game {...props}/>;
+      }
+    };
   }
 }
 export default App;
