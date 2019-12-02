@@ -1,6 +1,6 @@
 import React from 'react';
 
-Game = props => {
+const Game = props => {
   return (
     <section>
       <Board board = {props.board}/>

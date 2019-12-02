@@ -1,6 +1,6 @@
 import React from 'react';
 
-Board = (props) => {
+const Board = (props) => {
   return (
     <div id = "board">
       {generateSquares(props.board, props.rotateBoard)}
@@ -8,19 +8,19 @@ Board = (props) => {
   );
 }
 
-generateSquares = (board, rotateBoard) => {
+const generateSquares = (board, rotateBoard) => {
   if (rotateBoard) {
     for (let i = 7; i >= 0; i--) {
       for (let rank = 8; rank > 0; rank--) {
         let fileValue = (i + 10).toString(18).toLowerCase();
-        return <Square square = {props[fileValue + rank]}/>
+        return <Square square = {board[fileValue + rank]}/>
       }
     }
   } else {
     for (let i = 0; i < 8; i++) {
       for (let rank = 1; rank < 9; rank++) {
         let fileValue = (i + 10).toString(18).toLowerCase();
-        return <Square square = {props[fileValue + rank]}/>
+        return <Square square = {board[fileValue + rank]}/>
       }
     }
   }
